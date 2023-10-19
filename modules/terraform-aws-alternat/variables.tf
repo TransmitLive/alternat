@@ -79,10 +79,10 @@ variable "ingress_security_group_ids" {
   default     = []
 }
 
-variable "ingress_security_group_cidr_blocks" {
-  description = "A list of CIDR blocks that are allowed by the NAT instance."
-  type        = list(string)
-  default     = []
+variable "allow_vpc_cidr_ranges_security_group_ingress" {
+  description = "Whether to allow ingress from the VPC CIDR ranges to the NAT instance."
+  type        = bool
+  default     = false
 }
 
 variable "lifecycle_heartbeat_timeout" {
