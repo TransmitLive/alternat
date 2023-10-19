@@ -79,7 +79,7 @@ variable "ingress_security_group_ids" {
   default     = []
 }
 
-variable "nat_instance_ingress_cidr_blocks" {
+variable "ingress_security_group_cidr_blocks" {
   description = "A list of CIDR blocks that are allowed by the NAT instance."
   type        = list(string)
   default     = []
