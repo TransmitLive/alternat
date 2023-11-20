@@ -281,14 +281,13 @@ resource "aws_security_group_rule" "nat_instance_ingress" {
 }
 
 resource "aws_security_group_rule" "nat_instance_ip_range_ingress" {
-  count = length(var.ingress_security_group_cidr_blocks) > 0 ? 1 : 0
-  
+  count                    = var.allow_vpc_cidr_ranges_security_group_ingress ? 1 : 0
   type                     = "ingress"
   protocol                 = "-1"
   from_port                = 0
   to_port                  = 0
   security_group_id        = aws_security_group.nat_instance.id
-  cidr_blocks = var.ingress_security_group_cidr_blocks
+  cidr_blocks = local.all_vpc_cidr_ranges
 }
 
 ### NAT instance IAM
