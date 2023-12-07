@@ -107,6 +107,126 @@ resource "aws_autoscaling_group" "nat_instance" {
   }
 }
 
+resource "aws_cloudwatch_metric_alarm" "alert_pps_exceeded" {
+  for_each = { for k,v in aws_autoscaling_group.nat_instance: k => v if var.enable_nat_instance_network_allowance_alerts }
+  alarm_name = join("-", ["PacketsDropped", each.value.name])
+  alarm_description = "Alerts when excess packets are dropped due to bidirectional PPS exceeding the maximum for the instance."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods = "1"
+  threshold = 170 // about 10000 packets per minute
+
+  metric_query {
+    id = "expression"
+    expression = "RATE(m1)"
+    label = "Rate of packet loss"
+    return_data = true
+  }
+
+  metric_query {
+    id = "m1"
+
+    metric {
+      metric_name = "ethtool_pps_allowance_exceeded"
+      namespace = "Transmit/NATInstanceMetrics"
+      dimensions = {
+        AutoScalingGroupName = each.value.name
+      }
+      period = 60
+      stat = "Average"
+    }
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "alert_bw_in_allowance_exceeded" {
+  for_each = { for k,v in aws_autoscaling_group.nat_instance: k => v if var.enable_nat_instance_network_allowance_alerts }
+  alarm_name = join("-", ["BandwidthIn", each.value.name])
+  alarm_description = "Alerts when excess packets are dropped due to inbound aggregate bandwidth exceeding the maximum for the instance."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods = "1"
+  threshold = 170 // about 10000 packets per minute
+
+  metric_query {
+    id = "expression"
+    expression = "RATE(m1)"
+    label = "Rate of packet loss"
+    return_data = true
+  }
+
+  metric_query {
+    id = "m1"
+
+    metric {
+      metric_name = "ethtool_bw_in_allowance_exceeded"
+      namespace = "Transmit/NATInstanceMetrics"
+      dimensions = {
+        AutoScalingGroupName = each.value.name
+      }
+      period = 60
+      stat = "Average"
+    }
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "alert_bw_out_allowance_exceeded" {
+  for_each = { for k,v in aws_autoscaling_group.nat_instance: k => v if var.enable_nat_instance_network_allowance_alerts }
+  alarm_name = join("-", ["BandwidthOut", each.value.name])
+  alarm_description = "Alerts when excess packets are dropped due to outbound aggregate bandwidth exceeding the maximum for the instance."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods = "1"
+  threshold = 170 // about 10000 packets per minute
+
+  metric_query {
+    id = "expression"
+    expression = "RATE(m1)"
+    label = "Rate of packet loss"
+    return_data = true
+  }
+
+  metric_query {
+    id = "m1"
+
+    metric {
+      metric_name = "ethtool_bw_out_allowance_exceeded"
+      namespace = "Transmit/NATInstanceMetrics"
+      dimensions = {
+        AutoScalingGroupName = each.value.name
+      }
+      period = 60
+      stat = "Average"
+    }
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "alert_conntrack_allowance_exceeded" {
+  for_each = { for k,v in aws_autoscaling_group.nat_instance: k => v if var.enable_nat_instance_network_allowance_alerts }
+  alarm_name = join("-", ["Conntrack", each.value.name])
+  alarm_description = "Alerts when excess packets are dropped due to connection tracking exceeding the maximum for the instance, preventing new connections from being established."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods = "1"
+  threshold = 170 // about 10000 packets per minute
+
+  metric_query {
+    id = "expression"
+    expression = "RATE(m1)"
+    label = "Rate of packet loss"
+    return_data = true
+  }
+
+  metric_query {
+    id = "m1"
+
+    metric {
+      metric_name = "ethtool_conntrack_allowance_exceeded"
+      namespace = "Transmit/NATInstanceMetrics"
+      dimensions = {
+        AutoScalingGroupName = each.value.name
+      }
+      period = 60
+      stat = "Average"
+    }
+  }
+}
+
 resource "aws_iam_role" "alternat_lifecycle_hook" {
   name        = var.nat_instance_lifecycle_hook_role_name == "" ? null : var.nat_instance_lifecycle_hook_role_name
   name_prefix = var.nat_instance_lifecycle_hook_role_name == "" ? "alternat-lifecycle-hook-" : null

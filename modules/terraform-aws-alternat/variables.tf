@@ -248,3 +248,8 @@ variable "lambda_layer_arns" {
   default     = null
 }
 
+variable "enable_nat_instance_network_allowance_alerts" {
+  description = "Whether to enable CloudWatch alarms for when NAT instance network allowances are exceeded. Allowances are: ethtool_bw_in_allowance_exceeded, ethtool_bw_out_allowance_exceeded, ethtool_conntrack_allowance_exceeded, ethtool_pps_allowance_exceeded"
+  type        = bool
+  default     = false
+}
