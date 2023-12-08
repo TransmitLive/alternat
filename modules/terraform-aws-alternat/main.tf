@@ -107,6 +107,19 @@ resource "aws_autoscaling_group" "nat_instance" {
   }
 }
 
+resource "aws_sns_topic" "alternat_topic" {
+  name_prefix       = "alternat-topic"
+  kms_master_key_id = "alias/aws/sns"
+  tags              = var.tags
+}
+
+resource "aws_sns_topic_subscription" "alternat_email_subscription" {
+  count = var.nat_instance_network_allowance_alerts_email_address != "" ? 1 : 0
+  topic_arn = aws_sns_topic.alternat_topic.arn
+  protocol  = "email"
+  endpoint  = var.nat_instance_network_allowance_alerts_email_address
+}
+
 resource "aws_cloudwatch_metric_alarm" "alert_pps_exceeded" {
   for_each = { for k,v in aws_autoscaling_group.nat_instance: k => v if var.enable_nat_instance_network_allowance_alerts }
   alarm_name = join("-", ["PacketsDropped", each.value.name])
@@ -114,6 +127,7 @@ resource "aws_cloudwatch_metric_alarm" "alert_pps_exceeded" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods = "1"
   threshold = 170 // about 10000 packets per minute
+  alarm_actions = aws_sns_topic.alternat_topic.arn
 
   metric_query {
     id = "expression"
@@ -144,6 +158,7 @@ resource "aws_cloudwatch_metric_alarm" "alert_bw_in_allowance_exceeded" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods = "1"
   threshold = 170 // about 10000 packets per minute
+  alarm_actions = aws_sns_topic.alternat_topic.arn
 
   metric_query {
     id = "expression"
@@ -174,6 +189,7 @@ resource "aws_cloudwatch_metric_alarm" "alert_bw_out_allowance_exceeded" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods = "1"
   threshold = 170 // about 10000 packets per minute
+  alarm_actions = aws_sns_topic.alternat_topic.arn
 
   metric_query {
     id = "expression"
@@ -204,6 +220,7 @@ resource "aws_cloudwatch_metric_alarm" "alert_conntrack_allowance_exceeded" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods = "1"
   threshold = 170 // about 10000 packets per minute
+  alarm_actions = aws_sns_topic.alternat_topic.arn
 
   metric_query {
     id = "expression"

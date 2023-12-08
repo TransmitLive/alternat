@@ -253,3 +253,9 @@ variable "enable_nat_instance_network_allowance_alerts" {
   type        = bool
   default     = false
 }
+
+variable "nat_instance_network_allowance_alerts_email_address" {
+  description = "Email address to send CloudWatch alarms for when NAT instance network allowances are exceeded. If left blank, email alerts will not be sent."
+  type = string
+  default = ""
+}
