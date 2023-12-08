@@ -127,7 +127,7 @@ resource "aws_cloudwatch_metric_alarm" "alert_pps_exceeded" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods = "1"
   threshold = 170 // about 10000 packets per minute
-  alarm_actions = aws_sns_topic.alternat_topic.arn
+  alarm_actions = [ aws_sns_topic.alternat_topic.arn ]
 
   metric_query {
     id = "expression"
@@ -158,7 +158,7 @@ resource "aws_cloudwatch_metric_alarm" "alert_bw_in_allowance_exceeded" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods = "1"
   threshold = 170 // about 10000 packets per minute
-  alarm_actions = aws_sns_topic.alternat_topic.arn
+  alarm_actions = [ aws_sns_topic.alternat_topic.arn ]
 
   metric_query {
     id = "expression"
@@ -189,7 +189,7 @@ resource "aws_cloudwatch_metric_alarm" "alert_bw_out_allowance_exceeded" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods = "1"
   threshold = 170 // about 10000 packets per minute
-  alarm_actions = aws_sns_topic.alternat_topic.arn
+  alarm_actions = [ aws_sns_topic.alternat_topic.arn ]
 
   metric_query {
     id = "expression"
@@ -220,7 +220,7 @@ resource "aws_cloudwatch_metric_alarm" "alert_conntrack_allowance_exceeded" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods = "1"
   threshold = 170 // about 10000 packets per minute
-  alarm_actions = aws_sns_topic.alternat_topic.arn
+  alarm_actions = [ aws_sns_topic.alternat_topic.arn ]
 
   metric_query {
     id = "expression"
