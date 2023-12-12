@@ -114,7 +114,7 @@ resource "aws_sns_topic" "alternat_alerts_topic" {
 }
 
 resource "aws_sns_topic_subscription" "alternat_email_subscription" {
-  count = var.nat_instance_network_allowance_alerts_email_address != "" ? 1 : 0
+  count = var.enable_nat_instance_network_allowance_alerts && var.nat_instance_network_allowance_alerts_email_address != "" ? 1 : 0
   topic_arn = aws_sns_topic.alternat_alerts_topic.arn
   protocol  = "email"
   endpoint  = var.nat_instance_network_allowance_alerts_email_address
