@@ -251,11 +251,11 @@ variable "lambda_layer_arns" {
 variable "enable_nat_instance_network_allowance_alerts" {
   description = "Whether to enable CloudWatch alarms for when NAT instance network allowances are exceeded. Allowances are: ethtool_bw_in_allowance_exceeded, ethtool_bw_out_allowance_exceeded, ethtool_conntrack_allowance_exceeded, ethtool_pps_allowance_exceeded"
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "nat_instance_network_allowance_alerts_email_address" {
   description = "Email address to send CloudWatch alarms for when NAT instance network allowances are exceeded. If left blank, email alerts will not be sent."
   type = string
-  default = "alerts-nat-instances-aaaalp3tkbigjod7zjng2lr6lm@transmitlive.slack.com"
+  default = ""
 }
