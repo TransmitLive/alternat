@@ -18,7 +18,7 @@ output "nat_instance_security_group_id" {
 }
 
 output "connectivity_tester_lambda_names" {
-  description = "List of Lambda function names."
+  description = "List of names of the connectivity tester Lambda functions."
   value = [
     for lambda in aws_lambda_function.alternat_connectivity_tester
     : lambda.function_name
