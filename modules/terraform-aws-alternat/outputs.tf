@@ -16,3 +16,11 @@ output "nat_instance_security_group_id" {
   description = "NAT Instance Security Group ID."
   value = aws_security_group.nat_instance.id
 }
+
+output "connectivity_tester_lambda_names" {
+  description = "List of names of the connectivity tester Lambda functions."
+  value = [
+    for lambda in aws_lambda_function.alternat_connectivity_tester
+    : lambda.function_name
+  ]
+}
