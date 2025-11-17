@@ -1,7 +1,17 @@
-data "archive_file" "lambda" {
+locals {
+  autoscaling_func_env_vars = {
+    # Lambda function env vars cannot contain hyphens
+    for obj in var.vpc_az_maps
+    : replace(upper(obj.az), "-", "_") => join(",", obj.route_table_ids)
+  }
+  has_ipv6_env_var = { "HAS_IPV6" = var.lambda_has_ipv6 }
+  lambda_runtime   = "python3.12"
+}
+
+resource "archive_file" "lambda" {
   count       = var.lambda_package_type == "Zip" ? 1 : 0
   type        = "zip"
-  source_dir  = "${path.module}/../../functions/replace-route"
+  source_dir  = "${path.module}/functions/replace-route"
   excludes    = ["__pycache__"]
   output_path = var.lambda_zip_path
 }
@@ -15,30 +25,26 @@ resource "aws_lambda_function" "alternat_autoscaling_hook" {
   timeout       = var.lambda_timeout
   role          = aws_iam_role.nat_lambda_role.arn
 
-  layers        = var.lambda_layer_arns
+  layers = var.lambda_layer_arns
 
   image_uri = var.lambda_package_type == "Image" ? "${var.alternat_image_uri}:${var.alternat_image_tag}" : null
 
-  runtime          = var.lambda_package_type == "Zip" ? "python3.8" : null
+  runtime          = var.lambda_package_type == "Zip" ? local.lambda_runtime : null
   handler          = var.lambda_package_type == "Zip" ? var.lambda_handlers.alternat_autoscaling_hook : null
-  filename         = var.lambda_package_type == "Zip" ? data.archive_file.lambda[0].output_path : null
-  source_code_hash = var.lambda_package_type == "Zip" ? data.archive_file.lambda[0].output_base64sha256 : null
+  filename         = var.lambda_package_type == "Zip" ? archive_file.lambda[0].output_path : null
+  source_code_hash = var.lambda_package_type == "Zip" ? archive_file.lambda[0].output_base64sha256 : null
 
   environment {
-    variables = merge(local.autoscaling_func_env_vars, var.lambda_environment_variables)
+    variables = merge(
+      local.autoscaling_func_env_vars,
+      { NAT_GATEWAY_ID = var.nat_gateway_id },
+      var.lambda_environment_variables,
+    )
   }
 
   tags = merge({
     FunctionName = "alternat-autoscaling-lifecycle-hook",
   }, var.tags)
-}
-
-locals {
-  autoscaling_func_env_vars = {
-    # Lambda function env vars cannot contain hyphens
-    for obj in var.vpc_az_maps
-    : replace(upper(obj.az), "-", "_") => join(",", obj.route_table_ids)
-  }
 }
 
 resource "aws_iam_role" "nat_lambda_role" {
@@ -82,7 +88,7 @@ data "aws_iam_policy_document" "alternat_lambda_permissions" {
     ]
     resources = [
       for route_table in local.all_route_tables
-      : "arn:aws:ec2:${data.aws_region.current.name}:${data.aws_caller_identity.current.id}:route-table/${route_table}"
+      : "arn:aws:ec2:${data.aws_region.current.id}:${data.aws_caller_identity.current.id}:route-table/${route_table}"
     ]
   }
 }
@@ -129,14 +135,14 @@ resource "aws_lambda_function" "alternat_connectivity_tester" {
   timeout       = var.lambda_timeout
   role          = aws_iam_role.nat_lambda_role.arn
 
-  layers        = var.lambda_layer_arns
+  layers = var.lambda_layer_arns
 
   image_uri = var.lambda_package_type == "Image" ? "${var.alternat_image_uri}:${var.alternat_image_tag}" : null
 
-  runtime          = var.lambda_package_type == "Zip" ? "python3.8" : null
+  runtime          = var.lambda_package_type == "Zip" ? local.lambda_runtime : null
   handler          = var.lambda_package_type == "Zip" ? var.lambda_handlers.connectivity_tester : null
-  filename         = var.lambda_package_type == "Zip" ? data.archive_file.lambda[0].output_path : null
-  source_code_hash = var.lambda_package_type == "Zip" ? data.archive_file.lambda[0].output_base64sha256 : null
+  filename         = var.lambda_package_type == "Zip" ? archive_file.lambda[0].output_path : null
+  source_code_hash = var.lambda_package_type == "Zip" ? archive_file.lambda[0].output_base64sha256 : null
 
   dynamic "image_config" {
     for_each = var.lambda_package_type == "Image" ? [var.lambda_handlers.connectivity_tester] : []
@@ -147,11 +153,18 @@ resource "aws_lambda_function" "alternat_connectivity_tester" {
   }
 
   environment {
-    variables = merge({
-      ROUTE_TABLE_IDS_CSV = join(",", each.value.route_table_ids),
-      PUBLIC_SUBNET_ID    = each.value.public_subnet_id
-      CHECK_URLS          = join(",", var.connectivity_test_check_urls)
-    }, var.lambda_environment_variables)
+    variables = merge(
+      {
+        ROUTE_TABLE_IDS_CSV = join(",", each.value.route_table_ids),
+        PUBLIC_SUBNET_ID    = each.value.public_subnet_id
+        CHECK_URLS          = join(",", var.connectivity_test_check_urls)
+        NAT_GATEWAY_ID      = var.nat_gateway_id
+        NAT_ASG_NAME        = aws_autoscaling_group.nat_instance[each.key].name
+        ENABLE_NAT_RESTORE  = var.enable_nat_restore
+      },
+      local.has_ipv6_env_var,
+      var.lambda_environment_variables,
+    )
   }
 
   vpc_config {
@@ -202,4 +215,55 @@ resource "aws_lambda_permission" "allow_cloudwatch_to_call_connectivity_tester" 
   function_name = aws_lambda_function.alternat_connectivity_tester[each.key].function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.every_minute.arn
+}
+
+data "aws_iam_policy_document" "lambda_ssm_send_command_document" {
+  statement {
+    sid    = "AllowSSMSendCommandOnDocument"
+    effect = "Allow"
+
+    actions = [
+      "ssm:SendCommand",
+    ]
+
+    resources = [
+      "arn:aws:ssm:${data.aws_region.current.id}::document/AWS-RunShellScript",
+    ]
+  }
+  statement {
+    sid    = "AllowSSMSendCommandOnInstances"
+    effect = "Allow"
+
+    actions = [
+      "ssm:SendCommand",
+    ]
+
+    resources = [
+      "arn:aws:ec2:${data.aws_region.current.id}:${data.aws_caller_identity.current.id}:instance/*"
+    ]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/alterNATInstance"
+      values = [
+        "true"
+      ]
+    }
+  }
+  statement {
+    sid    = "AllowSSMAndEC2ReadOps"
+    effect = "Allow"
+
+    actions = [
+      "ssm:GetCommandInvocation",
+      "ec2:DescribeInstances"
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "lambda_ssm_send_command_policy" {
+  count  = var.enable_nat_restore ? 1 : 0
+  name   = "AllowLambdaToSendSSMCommand"
+  role   = aws_iam_role.nat_lambda_role.id
+  policy = data.aws_iam_policy_document.lambda_ssm_send_command_document.json
 }
