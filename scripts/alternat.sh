@@ -21,6 +21,8 @@ load_config() {
    fi
    validate_var "eip_allocation_ids_csv" "$eip_allocation_ids_csv"
    validate_var "route_table_ids_csv" "$route_table_ids_csv"
+   validate_var "enable_ssm" "$enable_ssm"
+   validate_var "enable_cloudwatch_agent" "$enable_cloudwatch_agent"
 }
 
 validate_var() {
@@ -35,39 +37,45 @@ validate_var() {
 # configure_nat() sets up Linux to act as a NAT device.
 # See https://docs.aws.amazon.com/vpc/latest/userguide/VPC_NAT_Instance.html#NATInstance
 configure_nat() {
-   echo "Beginning NAT configuration"
+   dnf -y install nftables conntrack-tools
+   systemctl enable --now nftables
 
-   echo "Determining the MAC address on eth0"
-   local eth0_mac="$(cat /sys/class/net/eth0/address)" || panic "Unable to determine MAC address on eth0."
-   echo "Found MAC $eth0_mac for eth0."
+   local nic_name="$(ip route show | grep default | sed -n 's/.*dev \([^\ ]*\).*/\1/p')"
+   echo "Found interface name ${nic_name}"
 
-   local vpc_cidr_uri="http://169.254.169.254/latest/meta-data/network/interfaces/macs/$eth0_mac/vpc-ipv4-cidr-blocks"
+   echo "Determining the MAC address on ${nic_name}"
+   local nic_mac="$(cat /sys/class/net/${nic_name}/address)" || panic "Unable to determine MAC address on ${nic_name}."
+   echo "Found MAC ${nic_mac} for ${nic_name}."
+
+   local vpc_cidr_uri="http://169.254.169.254/latest/meta-data/network/interfaces/macs/${nic_mac}/vpc-ipv4-cidr-blocks"
    echo "Metadata location for vpc ipv4 ranges: $vpc_cidr_uri"
 
-   local vpc_cidr_ranges=$(CURL_WITH_TOKEN "$vpc_cidr_uri")
-   if [ $? -ne 0 ]; then
+   readarray -t vpc_cidrs <<< $(CURL_WITH_TOKEN "$vpc_cidr_uri")
+   if [ ${#vpc_cidrs[*]} -lt 1 ]; then
       panic "Unable to obtain VPC CIDR range from metadata."
    else
-      echo "Retrieved VPC CIDR range(s) $vpc_cidr_ranges from metadata."
+      echo "Retrieved VPC CIDR range(s) ${vpc_cidrs[@]} from metadata."
    fi
-
-   IFS=' ' read -r -a vpc_cidrs <<< $(echo "$vpc_cidr_ranges")
 
    echo "Enabling NAT..."
    # Read more about these settings here: https://www.kernel.org/doc/Documentation/networking/ip-sysctl.txt
 
-   sysctl -q -w net.ipv4.ip_forward=1 net.ipv4.conf.eth0.send_redirects=0 net.ipv4.ip_local_port_range="1024 65535" ||
+   sysctl -q -w "net.ipv4.ip_forward"=1 "net.ipv4.conf.$nic_name.send_redirects"=0 "net.ipv4.ip_local_port_range"="1024 65535" ||
       panic
+
+   nft add table ip nat
+   nft add chain ip nat postrouting { type nat hook postrouting priority 100 \; }
 
    for cidr in "${vpc_cidrs[@]}";
    do
-      (iptables -t nat -C POSTROUTING -o eth0 -s "$cidr" -j MASQUERADE 2> /dev/null ||
-      iptables -t nat -A POSTROUTING -o eth0 -s "$cidr" -j MASQUERADE) ||
-      panic
+      nft add rule ip nat postrouting ip saddr "$cidr" oif "$nic_name" masquerade
+      if [ $? -ne 0 ]; then
+         panic "Unable to add nft rule for cidr $cidr. nft exited with status $?"
+      fi
    done
 
-   sysctl net.ipv4.ip_forward net.ipv4.conf.eth0.send_redirects net.ipv4.ip_local_port_range
-   iptables -n -t nat -L POSTROUTING
+   sysctl "net.ipv4.ip_forward" "net.ipv4.conf.${nic_name}.send_redirects" "net.ipv4.ip_local_port_range"
+   nft list ruleset
 
    echo "NAT configuration complete"
 }
@@ -156,6 +164,32 @@ configure_route_table() {
    done
 }
 
+# install_ssm_agent() installs the SSM agent if enable_ssm is true.
+install_ssm_agent() {
+   if [ "$enable_ssm" = "true" ]; then
+      echo "Installing SSM agent"
+      dnf install -y amazon-ssm-agent && \
+      systemctl enable --now amazon-ssm-agent
+      if [ $? -ne 0 ]; then
+         panic "Unable to install SSM agent"
+      fi
+      echo "SSM agent installed successfully"
+   fi
+}
+
+# install_cloudwatch_agent() installs the CloudWatch Agent if enable_cloudwatch_agent is true.
+install_cloudwatch_agent() {
+   if [ "$enable_cloudwatch_agent" = "true" ]; then
+      echo "Installing CloudWatch agent"
+      dnf install -y amazon-cloudwatch-agent && \
+      systemctl enable --now amazon-cloudwatch-agent
+      if [ $? -ne 0 ]; then
+         panic "Unable to install CloudWatch Agent"
+      fi
+      echo "CloudWatch Agent installed successfully"
+   fi
+}
+
 # alterNAT config file containing inputs needed for initialization
 CONFIG_FILE="/etc/alternat.conf"
 
@@ -172,8 +206,6 @@ export AWS_DEFAULT_OUTPUT="text"
 
 # Disable pager output
 # https://docs.aws.amazon.com/cli/latest/userguide/cli-usage-pagination.html#cli-usage-pagination-clientside
-# This is not needed in aws cli v1 which is installed on the current version of Amazon Linux 2.
-# However, it may be needed to prevent breakage if they update to cli v2 in the future.
 export AWS_PAGER=""
 
 # Set Instance Identity URI
@@ -186,8 +218,10 @@ INSTANCE_ID=$(CURL_WITH_TOKEN $II_URI | grep instanceId | awk -F\" '{print $4}')
 export AWS_DEFAULT_REGION=$(CURL_WITH_TOKEN $II_URI | grep region | awk -F\" '{print $4}')
 
 echo "Beginning self-managed NAT configuration"
+install_ssm_agent
 configure_nat
 disable_source_dest_check
 associate_eip
 configure_route_table
+install_cloudwatch_agent
 echo "Configuration completed successfully!"

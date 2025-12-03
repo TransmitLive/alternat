@@ -2,14 +2,15 @@
 
 NAT Gateways are dead. Long live NAT instances!
 
-Built and released with 💚 by <a href="https://chime.com"><img src="/assets/Chime_company_logo.png" alt="Chime Engineering" width="146"/></a>
+Built and released with 💚 by <a href="https://chime.com"><img src="/assets/Chime_company_logo.png" alt="Chime Engineering" width="60"/></a>
 
-[![GitHub Actions](https://github.com/1debit/alternat/workflows/Build/badge.svg)](https://github.com/1debit/alternat/actions)
+
+[![Test](https://github.com/chime/terraform-aws-alternat/actions/workflows/test.yaml/badge.svg)](https://github.com/chime/terraform-aws-alternat/actions/workflows/test.yaml)
 
 
 ## Background
 
-On AWS, [NAT devices](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat.html) are required for accessing the Internet from private VPC subnets. Usually, the best option is a NAT gateway, a fully managed NAT service. The [pricing structure of NAT gateway](https://aws.amazon.com/vpc/pricing/) includes charges of $.045 per hour per NAT Gateway, plus **$.045 per GB** processed. The former charge is reasonable at about $32.40 per month. However, the latter charge can be *extremely* expensive for larger traffic volumes.
+On AWS, [NAT devices](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat.html) are required for accessing the Internet from private VPC subnets. Usually, the best option is a NAT gateway, a fully managed NAT service. The [pricing structure of NAT gateway](https://aws.amazon.com/vpc/pricing/) includes charges of $0.045 per hour per NAT Gateway, plus **$0.045 per GB** processed. The former charge is reasonable at about $32.40 per month. However, the latter charge can be *extremely* expensive for larger traffic volumes.
 
 In addition to the direct NAT Gateway charges, there are also Data Transfer charges for outbound traffic leaving AWS (known as egress traffic). The cost varies depending on destination and volume, ranging from $0.09/GB to $0.01 per GB (after a free tier of 100GB). That’s right: traffic traversing the NAT Gateway is first charged for processing, then charged again for egress to the Internet.
 
@@ -33,15 +34,16 @@ Features:
 
 * Self-provisioned NAT instances in Auto Scaling Groups
 * Standby NAT Gateways with health checks and automated failover, facilitated by a Lambda function
-* Vanilla Amazon Linux 2 AMI (no AMI management requirement)
+* Failback to the NAT instance upon recovery (optional)
+* Always uses the latest vanilla Amazon Linux 2023 AMI (no AMI management requirement)
 * Optional use of SSM for connecting to the NAT instances
+* Optional use of CloudWatch Agent to monitor the NAT instances
 * Max instance lifetimes (no long-lived instances!) with automated failover
 * A Terraform module to set everything up
-* Compatibility with the default naming convention used by the open source [terraform-aws-vpc Terraform module](https://github.com/terraform-aws-modules/terraform-aws-vpc/blob/master/variables.tf)
 
 Read on to learn more about alterNAT.
 
-## Architecture overview
+## Architecture Overview
 
 ![Architecture diagram](/assets/architecture.png)
 
@@ -50,11 +52,11 @@ The two main elements of the NAT instance solution are:
 1. The NAT instance Auto Scaling Groups, one per zone, with a corresponding standby NAT Gateway
 1. The replace-route Lambda function
 
-Both are deployed by the Terraform module located in [`modules/terraform-aws-alternat`](modules/terraform-aws-alternat).
+Both are deployed by the Terraform module.
 
-### NAT instance Auto Scaling Group and standby NAT Gateway
+### NAT Instance Auto Scaling Group and Standby NAT Gateway
 
-The solution deploys an Auto Scaling Group (ASG) for each provided public subnet. Each ASG contains a single instance. When the instance boots, the [user data](modules/terraform-aws-alternat/alternat.sh.tftpl) initializes the instance to do the NAT stuff.
+The solution deploys an Auto Scaling Group (ASG) for each provided public subnet. Each ASG contains a single instance. When the instance boots, the [user data](alternat.sh.tftpl) initializes the instance to do the NAT stuff.
 
 By default, the ASGs are configured with a [maximum instance lifetime](https://docs.aws.amazon.com/autoscaling/ec2/userguide/asg-max-instance-lifetime.html). This is to facilitate periodic replacement of the instance to automate patching. When the maximum instance lifetime is reached (14 days by default), the following occurs:
 
@@ -65,7 +67,7 @@ By default, the ASGs are configured with a [maximum instance lifetime](https://d
 
 The standby NAT Gateway is a safety measure. It is only used if the NAT instance is actively being replaced, either due to the maximum instance lifetime or due to some other failure scenario.
 
-### replace-route Lambda Function
+### `replace-route` Lambda Function
 
 The purpose of [the replace-route Lambda Function](functions/replace-route) is to update the route table of the private subnets to route through the standby NAT gateway. It does this in response to two events:
 
@@ -76,7 +78,26 @@ When a NAT instance in any of the zonal ASGs is terminated, the lifecycle hook p
 
 The replace-route function also acts as a health check. Every minute, in the private subnet of each availability zone, the function checks that connectivity to the Internet works by requesting https://www.example.com and, if that fails, https://www.google.com. If the request succeeds, the function exits. If both requests fail, the NAT instance is presumably borked, and the function updates the route to point at the standby NAT gateway.
 
-In the event that a NAT instance is unavailable, the function would have no route to the AWS EC2 and Lambda APIs to perform the necessary steps to update the route table. This is mitigated by the use of [interface VPC endpoints](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/interface-vpc-endpoints.html) to EC2 and Lambda.
+In the event that a NAT instance is unavailable, the function would have no route to the AWS EC2 API to perform the necessary steps to update the route table. This is mitigated by the use of an [interface VPC endpoint](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/interface-vpc-endpoints.html) to EC2.
+
+### NAT instance recovery
+
+If the route has previously been updated to use the standby NAT gateway due to a health check failure, the replace-route function can optionally attempt to detect recovery of the NAT instance. This allows the system to automatically recover and return to the preferred, cost-effective path of the NAT instance as soon as it is healthy.
+
+This feature is disabled by default. To enable it, set `enable_nat_restore=true` and `enable_ssm=true`.
+
+How it works:
+
+0. Assume that the connectivity check has failed and the route was updated to use the NAT Gateway.
+1. During the next connectivity check, attempt to restore the NAT instance
+2. Send an SSM command to `curl` the connectivity check URLs
+3. If the connection is successful, check the NAT configuration
+4. If the configuration is correct, update the route to use the NAT instance.
+5. Continue with regular connectivity checks through the NAT instance.
+
+Note that the route recovery feature does _not_ attempt to remediate any configuration issue on the instance; the instance remains immutable.
+
+Also, under certain edge cases, this can potentially lead to flapping between NAT Gateway => NAT Instance => NAT Gateway => NAT Instance. Imagine a scenario where `curl` commands succeed from the NAT instance, and it appears to be configured correctly, so the NAT instance route is restored. But in actuality, a missing security group rule prevents traffic from reaching the NAT instance. During every connectivity check interval, the Lambda will update the route to use the instance since it appears healthy, but then the regular connectivity checks fail due to the missing security group rule, so the Lambda will immediately replace the route again pointing at NAT Gateway. This can happen until the security group rule is fixed.
 
 ## Drawbacks
 
@@ -92,11 +113,13 @@ In the design described above, NAT instances are intentionally terminated for au
 
 Importantly, **connectivity to the Internet is never lost**. A route to the Internet is available at all times.
 
-For our use case, and for many others, this limitation is acceptable. Many clients will open new connections. Other clients may use primarily short-lived connections that retry after a failure. For some use cases - for example, file transfers, or other operations that are unable to recover from failures - this drawback may be unacceptable. In this case, the max instance lifetime can be disabled, and route changes would only occur in the unlikely event that a NAT instance failed for another reason, in which case the connectivity checker automatically redirects through the NAT Gateway.
+For our use case, and for many others, this limitation is acceptable. Many clients will open new connections. Other clients may use primarily short-lived connections that retry after a failure.
 
-The Internet is unreliable by design, so failure modes such as connection loss should be a consideration in any resilient system.
+For some use cases - for example, file transfers, or other operations that are unable to recover from failures - this drawback may be unacceptable. In this case, the max instance lifetime can be disabled, and route changes would only occur in the unlikely event that a NAT instance failed for another reason, in which case the connectivity checker automatically redirects through the NAT Gateway.
 
-### Edge cases
+[The Internet is unreliable](https://en.wikipedia.org/wiki/Fallacies_of_distributed_computing), so failure modes such as connection loss should be a consideration in any resilient system.
+
+### Edge Cases
 
 As described above, alterNAT uses the [`ReplaceRoute` API](https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ReplaceRoute.html) (among others) to switch the route in the event of a NAT instance failure or Auto Scaling termination event. One possible failure scenario could occur where the EC2 control plane is for some reason not functional (e.g. an outage within AWS) and a NAT instance fails at the same time. The replace-route function may be unable to automatically switch the route to the NAT Gateway because the control plane is down. One mitigation would be to attempt to manually replace the route for the impacted subnet(s) using the CLI or console. However, if the control plane is in fact down and no APIs are working, waiting until the issue is resolved may be the only option.
 
@@ -107,9 +130,9 @@ There are two ways to deploy alterNAT:
 - By building a Docker image and using AWS Lambda support for containers
 - By using AWS Lambda runtime for Python directly
 
-Use this project directly, as provided, or draw inspiration from it and use only the parts you need. We cut [releases](https://github.com/1debit/alternat/releases) following the [Semantic Versioning](https://semver.org/) method. We recommend pinning to our tagged releases or using the short commit SHA if you decide to use this repo directly.
+Use this project directly, as provided, or draw inspiration from it and use only the parts you need. We cut [releases](https://github.com/chime/terraform-aws-alternat/releases) following the [Semantic Versioning](https://semver.org/) method. We recommend pinning to our tagged releases or using the short commit SHA if you decide to use this repo directly.
 
-### Building and pushing the container image
+### Building and Pushing the Container Image
 
 Build and push the container image using the [`Dockerfile`](Dockerfile).
 
@@ -120,15 +143,16 @@ docker build . -t <your_registry_url>/<your_repo:<release tag or short git commi
 docker push <your_registry_url>/<your_repo:<release tag or short git commit sha>
 ```
 
-### Use the Terraform module
+### Use the Terraform Module
 
-Start by reviewing the available [input variables](modules/terraform-aws-alternat/variables.tf). Example usage:
+Start by reviewing the available [input variables](variables.tf).
+
+Example usage using the [terraform module](https://registry.terraform.io/modules/chime/alternat/aws/latest):
 
 ```hcl
 locals {
   vpc_az_maps = [
-    for index, rt in module.vpc.private_route_table_ids
-    : {
+    for index, rt in module.vpc.private_route_table_ids : {
       az                 = data.aws_subnet.subnet[index].availability_zone
       route_table_ids    = [rt]
       public_subnet_id   = module.vpc.public_subnets[index]
@@ -143,7 +167,9 @@ data "aws_subnet" "subnet" {
 }
 
 module "alternat_instances" {
-  source = "git::https://github.com/1debit/alternat.git//modules/terraform-aws-alternat?ref=v0.3.3"
+  source  = "chime/alternat/aws"
+  # It's recommended to pin every module to a specific version
+  # version = "x.x.x"
 
   alternat_image_uri = "0123456789012.dkr.ecr.us-east-1.amazonaws.com/alternat-functions-lambda"
   alternat_image_tag = "v0.3.3"
@@ -203,83 +229,99 @@ If you are using the open source terraform-aws-vpc module, you can set `nat_gate
 
 AlterNATively, you can remove the NAT Gateways and their EIPs from your existing configuration and then `terraform import` them to allow alterNAT to manage them.
 
-#### Why isn't this module published on the Terraform registry?
-
-While we'd like for this to be available on the Terraform Registry, it requires a specific repo naming convention and folder structure that we do not want to adopt.
-
-### Other considerations
+### Other Considerations
 
 - Read [the Amazon EC2 instance network bandwidth page](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-network-bandwidth.html) carefully. In particular:
 
-> To other Regions, an internet gateway, Direct Connect, or local gateways (LGW) – Traffic can utilize up to 50% of the network bandwidth available to a current generation instance with a minimum of 32 vCPUs. Bandwidth for a current generation instance with less than 32 vCPUs is limited to 5 Gbps.
+  > To other Regions, an internet gateway, Direct Connect, or local gateways (LGW) – Traffic can utilize up to 50% of the network bandwidth available to a current generation instance with a minimum of 32 vCPUs. Bandwidth for a current generation instance with less than 32 vCPUs is limited to 5 Gbps.
 
 - Hence if you need more than 5Gbps, make sure to use an instance type with at least 32 vCPUs, and divide the bandwidth in half. So the `c6gn.8xlarge` which offers 50Gbps guaranteed bandwidth will have 25Gbps available for egress to other regions, an internet gateway, etc.
 
 - It's wise to start by overprovisioning, observing patterns, and resizing if necessary. Don't be surprised by the network I/O credit mechanism explained in [the AWS EC2 docs](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-network-bandwidth.html) thusly:
 
-> Typically, instances with 16 vCPUs or fewer (size 4xlarge and smaller) are documented as having "up to" a specified bandwidth; for example, "up to 10 Gbps". These instances have a baseline bandwidth. To meet additional demand, they can use a network I/O credit mechanism to burst beyond their baseline bandwidth. Instances can use burst bandwidth for a limited time, typically from 5 to 60 minutes, depending on the instance size.
+  > Typically, instances with 16 vCPUs or fewer (size 4xlarge and smaller) are documented as having "up to" a specified bandwidth; for example, "up to 10 Gbps". These instances have a baseline bandwidth. To meet additional demand, they can use a network I/O credit mechanism to burst beyond their baseline bandwidth. Instances can use burst bandwidth for a limited time, typically from 5 to 60 minutes, depending on the instance size.
 
 - [SSM Session Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager.html) is enabled by default. To view NAT connections on an instance, use sessions manager to connect, then run `sudo cat /proc/net/nf_conntrack`. Disable SSM by setting `enable_ssm=false`.
 
-- We intentionally use `most_recent=true` for the Amazon Linux 2 AMI. This helps to ensure that the latest AMI is used in the ASG launch template. If a new AMI is available when you run `terraform apply`, the launch template will be updated with the latest AMI. The new AMI will be launched automatically when the maximum instance lifetime is reached.
+- A new instance will be launched automatically when the maximum instance lifetime is reached using the latest AMI.
 
-- Most of the time, except when the instance is actively being replaces, NAT traffic should be routed through the NAT instance and NOT through the NAT Gateway. You should monitor your logs for the text "Failed connectivity tests! Replacing route" and alert when this occurs as you may need to manually intervene to resolve a problem with the NAT instances.
+- Most of the time, except when the instance is actively being replaced, NAT traffic should be routed through the NAT instance and NOT through the NAT Gateway. You can monitor the logs for the text "Failed connectivity tests! Replacing route" to be alerted to NAT instance failures.
 
 - There are four Elastic IP addresses for the NAT instances and four for the NAT Gateways. Be sure to add all eight addresses to any external allow lists if necessary.
 
-## Future work
+- If you plan on running this in a dual stack network (IPv4 and IPv6), you may notice that it takes ~10 minutes for an alternat node to start. In that case, you can use the `nat_instance_user_data_pre_install` variable to prefer IPv4 over IPv6 before running any user data.
 
-We would like this benefit to benefit as many users as possible. Possible future enhancements include:
+  ```tf
+    nat_instance_user_data_pre_install = <<-EOF
+      # Prefer IPv4 over IPv6
+      echo 'precedence ::ffff:0:0/96 100' >> /etc/gai.conf
+    EOF
+  ```
+- If you see errors like: `error connecting to https://www.google.com/: <urlopen error [Errno 97] Address family not supported by protocol>` in the connectivity tester logs, you can set `lambda_has_ipv6 = false`. This will cause the lambda to request IPv4 addresses only in DNS lookups.
 
-- CloudFormation implementation
-- Pulumi implementation
-- Support for maintenance windows
-- Addition of a CloudWatch dashboard
+- If you want to use just a single NAT Gateway for fallback, you can create it externally and provide its ID through the `nat_gateway_id` variable. Note that you will incur cross AZ traffic charges of $0.01/GB.
+
+  ```tf
+    create_nat_gateways = false
+    nat_gateway_id      = "nat-..."
+  ```
+
+- If your EIPs are critical, for example if they have been allow listed by third parties, use `prevent_destroy_eips=true` to prevent accidental deletion.
+
+- Monitoring by the [CloudWatch Agent](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Install-CloudWatch-Agent.html) is disabled by default. Enable by setting `enable_cloudwatch_agent=true`. Note that you will incur custom metric charges:
+
+  > Metrics collected by the CloudWatch agent are billed as custom metrics. For more information about CloudWatch metrics pricing, see [Amazon CloudWatch Pricing](https://aws.amazon.com/cloudwatch/pricing/).
 
 ## Contributing
 
-[Issues](https://github.com/1debit/alternat/issues) and [pull requests](https://github.com/1debit/alternat/pulls) are most welcome!
+[Issues](https://github.com/chime/terraform-aws-alternat/issues) and [pull requests](https://github.com/chime/terraform-aws-alternat/pulls) are most welcome!
 
 alterNAT is intended to be a safe, welcoming space for collaboration. Contributors are expected to adhere to the [Contributor Covenant code of conduct](CODE_OF_CONDUCT.md).
 
 
 ## Local Testing
 
+### Terraform module testing
+
+The `test/` directory uses the [Terratest](https://terratest.gruntwork.io/) library to run integration tests on the Terraform module. The test uses the example located in `examples/` to set up Alternat, runs validations, then destroys the resources. Unfortunately, because of how the [Lambda Hyperplane ENI](https://docs.aws.amazon.com/lambda/latest/dg/foundation-networking.html#foundation-nw-eni) deletion process works, this takes a very long time (about 35 minutes) to run.
+
+### Lambda function testing
+
 To test locally, install the AWS SAM CLI client:
 
-```
+```shell
 brew tap aws/tap
 brew install aws-sam-cli
 ```
 
 Build sam and invoke the functions:
 
-```
+```shell
 sam build
 sam local invoke <FUNCTION NAME> -e <event_filename>.json
 ```
 
 Example:
 
-```
+```shell
 cd functions/replace-route
 sam local invoke AutoScalingTerminationFunction -e sns-event.json
 sam local invoke ConnectivityTestFunction -e cloudwatch-event.json
 ```
 
 
-## Making actual calls to AWS for testing
+## Testing with SAM
 
 In the first terminal
 
-```
+```shell
 cd functions/replace-route
 sam build && sam local start-lambda # This will start up a docker container running locally
 ```
 
 In a second terminal, invoke the function back in terminal one:
 
-```
+```shell
 cd functions/replace-route
 aws lambda invoke --function-name "AutoScalingTerminationFunction" --endpoint-url "http://127.0.0.1:3001" --region us-east-1 --cli-binary-format raw-in-base64-out --payload file://./sns-event.json --no-verify-ssl out.txt
 aws lambda invoke --function-name "ConnectivityTestFunction" --endpoint-url "http://127.0.0.1:3001" --region us-east-1 --cli-binary-format raw-in-base64-out --payload file://./cloudwatch-event.json --no-verify-ssl out.txt

@@ -1,6 +1,6 @@
 variable "additional_instance_policies" {
-  description = "Additional policies for the HA NAT instance IAM role."
-  type        = list(object({
+  description = "Additional policies for the Alternat instance IAM role."
+  type = list(object({
     policy_name = string
     policy_json = string
   }))
@@ -8,13 +8,13 @@ variable "additional_instance_policies" {
 }
 
 variable "alternat_image_tag" {
-  description = "The tag of the container image for the HA NAT Lambda functions."
+  description = "The tag of the container image for the Alternat Lambda functions."
   type        = string
   default     = "latest"
 }
 
 variable "alternat_image_uri" {
-  description = "The URI of the container image for the HA NAT Lambda functions."
+  description = "The URI of the container image for the Alternat Lambda functions."
   type        = string
   default     = ""
 }
@@ -61,16 +61,16 @@ variable "enable_ec2_endpoint" {
   default     = true
 }
 
-variable "enable_lambda_endpoint" {
-  description = "Whether to create a VPC endpoint to Lambda for Internet Connectivity testing."
+variable "enable_ssm" {
+  description = "Whether to enable SSM on the Alternat instances."
   type        = bool
   default     = true
 }
 
-variable "enable_ssm" {
-  description = "Whether to enable SSM on the HA NAT instances."
+variable "enable_nat_restore" {
+  description = "Whether to enable NAT restore functionality."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "ingress_security_group_ids" {
@@ -83,6 +83,12 @@ variable "allow_vpc_cidr_ranges_security_group_ingress" {
   description = "Whether to allow ingress from the VPC CIDR ranges to the NAT instance."
   type        = bool
   default     = false
+}
+
+variable "ingress_security_group_ipv6_cidr_blocks" {
+  description = "A list of IPv6 CIDR blocks that are allowed by the NAT instance."
+  type        = list(string)
+  default     = []
 }
 
 variable "lifecycle_heartbeat_timeout" {
@@ -117,6 +123,12 @@ variable "nat_instance_iam_profile_name" {
 
 variable "nat_instance_iam_role_name" {
   description = "Name to use for the IAM role used by the NAT instance. Must be globally unique in this AWS account. Defaults to alternat-instance- as a prefix."
+  type        = string
+  default     = ""
+}
+
+variable "nat_instance_key_name" {
+  description = "The name of the key pair to use for the NAT instance. This is primarily used for testing."
   type        = string
   default     = ""
 }
@@ -161,10 +173,22 @@ variable "nat_instance_eip_ids" {
   default     = []
 }
 
+variable "nat_instance_user_data_pre_install" {
+  description = "Pre-install shell script to run at boot before configuring alternat."
+  type        = string
+  default     = ""
+}
+
 variable "nat_instance_user_data_post_install" {
   description = "Post-install shell script to run at boot after configuring alternat."
   type        = string
   default     = ""
+}
+
+variable "prevent_destroy_eips" {
+  description = "Prevents accidental destruction of EIPs by setting `prevent_destroy=true`"
+  type        = bool
+  default     = false
 }
 
 variable "tags" {
@@ -175,12 +199,18 @@ variable "tags" {
 
 variable "vpc_az_maps" {
   description = "A map of az to private route tables that the NAT instances will manage."
-  type        = list(object({
+  type = list(object({
     az                 = string
     private_subnet_ids = list(string)
     public_subnet_id   = string
     route_table_ids    = list(string)
   }))
+}
+
+variable "nat_gateway_id" {
+  description = "NAT Gateway ID to use for fallback. If not provided, the gateway in the same subnet as relevant NAT instance is selected."
+  type        = string
+  default     = ""
 }
 
 variable "vpc_id" {
@@ -214,7 +244,7 @@ variable "lambda_timeout" {
 
 variable "lambda_handlers" {
   description = "Lambda handlers."
-  type        = object({
+  type = object({
     connectivity_tester       = string,
     alternat_autoscaling_hook = string,
   })
@@ -228,6 +258,12 @@ variable "lambda_environment_variables" {
   description = "Environment variables to be provided to the lambda function."
   type        = map(string)
   default     = null
+}
+
+variable "lambda_has_ipv6" {
+  description = "Controls whether or not the lambda function can use IPv6."
+  type        = bool
+  default     = true
 }
 
 variable "lambda_zip_path" {
@@ -254,8 +290,26 @@ variable "enable_nat_instance_network_allowance_alerts" {
   default     = false
 }
 
+variable "enable_cloudwatch_agent" {
+  description = "Whether to enable CloudWatch Agent on the NAT instances."
+  type        = bool
+  default     = false
+}
+
 variable "nat_instance_network_allowance_alerts_email_address" {
   description = "Email address to send CloudWatch alarms for when NAT instance network allowances are exceeded. If left blank, email alerts will not be sent."
   type = string
   default = ""
+}
+
+variable "cloudwatch_namespace" {
+  description = "The name of the CloudWatch namespace for the CloudWatch Agent"
+  type        = string
+  default     = "alterNAT"
+}
+
+variable "cloudwatch_interfaces" {
+  description = "List of NAT instance interfaces that should be monitored by the CloudWatch Agent"
+  type        = list(string)
+  default     = ["ens5", "ens6"]
 }
