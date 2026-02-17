@@ -1,4 +1,4 @@
-FROM public.ecr.aws/lambda/python:3.12
+FROM public.ecr.aws/lambda/python:3.12.2026.02.17.14
 
 # Copy function code
 COPY functions/replace-route/app.py ${LAMBDA_TASK_ROOT}
