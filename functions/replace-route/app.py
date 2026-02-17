@@ -4,6 +4,7 @@ import logging
 import time
 import urllib
 import socket
+import ssl
 
 import botocore
 import boto3
@@ -310,7 +311,8 @@ def check_connection(check_urls):
         try:
             req = urllib.request.Request(url)
             req.add_header('User-Agent', 'alternat/1.0')
-            urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT)
+            context = ssl.create_default_context()
+            urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT, context=context)
             logger.debug("Successfully connected to %s", url)
             return True
         except urllib.error.HTTPError as error:
